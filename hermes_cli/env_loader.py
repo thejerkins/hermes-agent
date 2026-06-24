@@ -78,6 +78,8 @@ def format_secret_source_suffix(env_var: str) -> str:
         return ""
     if source == "bitwarden":
         return " (from Bitwarden)"
+    if source == "doppler":
+        return " (from Doppler)"
     # Generic fallback — future-proofing for additional secret sources
     # (e.g. 1Password, HashiCorp Vault) without having to update every
     # call site.
@@ -275,9 +277,16 @@ def _apply_external_secret_sources(home_path: Path) -> None:
         return
 
     bw_cfg = (cfg or {}).get("bitwarden") or {}
-    if not bw_cfg.get("enabled"):
-        return
+    if bw_cfg.get("enabled"):
+        _apply_bitwarden_source(bw_cfg, home_path)
 
+    dop_cfg = (cfg or {}).get("doppler") or {}
+    if dop_cfg.get("enabled"):
+        _apply_doppler_source(dop_cfg, home_path)
+
+
+def _apply_bitwarden_source(bw_cfg: dict, home_path: Path) -> None:
+    """Pull secrets from Bitwarden Secrets Manager into os.environ."""
     try:
         from agent.secret_sources.bitwarden import apply_bitwarden_secrets
     except ImportError:
@@ -321,6 +330,43 @@ def _apply_external_secret_sources(home_path: Path) -> None:
             f"  Bitwarden Secrets Manager: {warn}",
             file=sys.stderr,
         )
+
+
+def _apply_doppler_source(dop_cfg: dict, home_path: Path) -> None:
+    """Pull secrets from Doppler into os.environ."""
+    try:
+        from agent.secret_sources.doppler import apply_doppler_secrets
+    except ImportError:
+        return
+
+    result = apply_doppler_secrets(
+        enabled=True,
+        token_env=dop_cfg.get("token_env", "DOPPLER_TOKEN"),
+        token_file=str(dop_cfg.get("token_file", "") or "").strip(),
+        project=str(dop_cfg.get("project", "") or "").strip(),
+        config=str(dop_cfg.get("config", "") or "").strip(),
+        override_existing=bool(dop_cfg.get("override_existing", False)),
+        cache_ttl_seconds=float(dop_cfg.get("cache_ttl_seconds", 300)),
+        disk_cache=bool(dop_cfg.get("disk_cache", False)),
+        home_path=home_path,
+    )
+
+    if result.applied:
+        # Doppler values are user-supplied; re-run the ASCII sanitization
+        # pass for the same reason as Bitwarden (see #6843).
+        _sanitize_loaded_credentials()
+        for name in result.applied:
+            _SECRET_SOURCES[name] = "doppler"
+        print(
+            f"  Doppler: applied {len(result.applied)} "
+            f"secret{'s' if len(result.applied) != 1 else ''} "
+            f"({', '.join(sorted(result.applied))})",
+            file=sys.stderr,
+        )
+    if result.error:
+        print(f"  Doppler: {result.error}", file=sys.stderr)
+    for warn in result.warnings:
+        print(f"  Doppler: {warn}", file=sys.stderr)
 
 
 def _load_secrets_config(home_path: Path) -> dict:

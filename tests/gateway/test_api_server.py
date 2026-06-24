@@ -413,6 +413,7 @@ def _create_app(adapter: APIServerAdapter) -> web.Application:
     app.router.add_get("/v1/models", adapter._handle_models)
     app.router.add_get("/v1/capabilities", adapter._handle_capabilities)
     app.router.add_get("/v1/skills", adapter._handle_skills)
+    app.router.add_get("/skills", adapter._handle_mc_skills)
     app.router.add_get("/v1/toolsets", adapter._handle_toolsets)
     app.router.add_post("/v1/chat/completions", adapter._handle_chat_completions)
     app.router.add_post("/v1/responses", adapter._handle_responses)
@@ -674,6 +675,7 @@ class TestCapabilitiesEndpoint:
             assert data["features"]["session_continuity_header"] == "X-Hermes-Session-Id"
             assert data["endpoints"]["run_status"]["path"] == "/v1/runs/{run_id}"
             assert data["endpoints"]["skills"] == {"method": "GET", "path": "/v1/skills"}
+            assert data["endpoints"]["mc_skills"] == {"method": "GET", "path": "/skills"}
             assert data["endpoints"]["toolsets"] == {"method": "GET", "path": "/v1/toolsets"}
 
     @pytest.mark.asyncio
@@ -742,6 +744,65 @@ class TestSkillsEndpoint:
 
                 authed = await cli.get(
                     "/v1/skills",
+                    headers={"Authorization": "Bearer sk-secret"},
+                )
+                assert authed.status == 200
+
+    @pytest.mark.asyncio
+    async def test_mc_skills_returns_openclaw_compatible_superset(self, adapter):
+        fake_skills = [
+            {
+                "name": "github",
+                "description": "GitHub workflow skill",
+                "path": "/Users/jerkins/.hermes/skills/github",
+                "category": "github",
+                "tags": ["git", "pr"],
+                "enabled": True,
+                "readiness": "ready",
+            },
+            {
+                "name": "airtable",
+                "description": "Airtable REST API via curl",
+                "path": "/Users/jerkins/.hermes/skills/productivity/airtable",
+                "category": "productivity",
+                "tags": ["airtable"],
+                "enabled": True,
+                "readiness": "missing-deps",
+            },
+        ]
+        with patch("tools.skills_tool._find_all_skills", return_value=list(fake_skills)):
+            app = _create_app(adapter)
+            async with TestClient(TestServer(app)) as cli:
+                resp = await cli.get("/skills")
+                assert resp.status == 200
+                data = await resp.json()
+                assert data["agent"] == "barry"
+                assert data["source"] == "hermes"
+                assert "skills" in data
+                by_name = {skill["name"]: skill for skill in data["skills"]}
+                assert by_name["github"] == fake_skills[0]
+                assert by_name["airtable"]["readiness"] == "missing-deps"
+                for entry in data["skills"]:
+                    assert set(entry.keys()) >= {
+                        "name",
+                        "description",
+                        "path",
+                        "category",
+                        "tags",
+                        "enabled",
+                        "readiness",
+                    }
+
+    @pytest.mark.asyncio
+    async def test_mc_skills_requires_auth_when_key_configured(self, auth_adapter):
+        with patch("tools.skills_tool._find_all_skills", return_value=[]):
+            app = _create_app(auth_adapter)
+            async with TestClient(TestServer(app)) as cli:
+                resp = await cli.get("/skills")
+                assert resp.status == 401
+
+                authed = await cli.get(
+                    "/skills",
                     headers={"Authorization": "Bearer sk-secret"},
                 )
                 assert authed.status == 200

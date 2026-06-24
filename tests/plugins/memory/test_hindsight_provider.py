@@ -153,6 +153,60 @@ def test_normalize_retain_tags_accepts_json_array_string():
     assert _normalize_retain_tags(value) == ["agent:fakeassistantname", "source_system:hermes-agent"]
 
 
+def test_on_memory_write_explicitly_mirrors_even_when_auto_retain_disabled(provider):
+    provider._auto_retain = False
+    provider._ensure_writer = MagicMock()
+    provider._register_atexit = MagicMock()
+
+    provider.on_memory_write(
+        "add",
+        "user",
+        "riz prefers local-first memory routing",
+        metadata={"mirror_reason": "accepted_write", "built_in_saved": True},
+    )
+
+    provider._ensure_writer.assert_called_once()
+    job = provider._retain_queue.get_nowait()
+    try:
+        job()
+    finally:
+        provider._retain_queue.task_done()
+
+    provider._client.aretain.assert_awaited_once()
+    kwargs = provider._client.aretain.await_args.kwargs
+    assert kwargs["content"] == "riz prefers local-first memory routing"
+    assert kwargs["context"] == "built-in memory add accepted_write"
+    assert kwargs["metadata"]["target"] == "user"
+    assert kwargs["metadata"]["built_in_saved"] == "true"
+    assert "builtin-memory" in kwargs["tags"]
+    assert "accepted-write" in kwargs["tags"]
+
+
+def test_on_memory_write_routes_overflow_rejection_as_explicit_retain(provider):
+    provider._ensure_writer = MagicMock()
+    provider._register_atexit = MagicMock()
+
+    provider.on_memory_write(
+        "add",
+        "memory",
+        "overflow-only durable fact",
+        metadata={"mirror_reason": "memory_limit_exceeded", "built_in_saved": False},
+    )
+
+    job = provider._retain_queue.get_nowait()
+    try:
+        job()
+    finally:
+        provider._retain_queue.task_done()
+
+    kwargs = provider._client.aretain.await_args.kwargs
+    assert kwargs["content"] == "overflow-only durable fact"
+    assert kwargs["context"] == "built-in memory add memory_limit_exceeded"
+    assert kwargs["metadata"]["built_in_saved"] == "false"
+    assert kwargs["metadata"]["mirror_reason"] == "memory_limit_exceeded"
+    assert "overflow-routed" in kwargs["tags"]
+
+
 # ---------------------------------------------------------------------------
 # Schema tests
 # ---------------------------------------------------------------------------

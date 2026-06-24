@@ -8,6 +8,8 @@ Exposes an HTTP server with endpoints:
 - DELETE /v1/responses/{response_id} — Delete a stored response
 - GET  /v1/models                  — lists hermes-agent as an available model
 - GET  /v1/capabilities            — machine-readable API capabilities for external UIs
+- GET  /v1/skills                  — OpenAI-style list of installed Hermes skills
+- GET  /skills                     — Mission Control/OpenClaw-compatible skills payload
 - GET  /api/sessions               — list client-visible Hermes sessions
 - POST /api/sessions               — create an empty Hermes session
 - GET/PATCH/DELETE /api/sessions/{session_id} — read/update/delete a session
@@ -1184,6 +1186,7 @@ class APIServerAdapter(BasePlatformAdapter):
                 "run_approval": {"method": "POST", "path": "/v1/runs/{run_id}/approval"},
                 "run_stop": {"method": "POST", "path": "/v1/runs/{run_id}/stop"},
                 "skills": {"method": "GET", "path": "/v1/skills"},
+                "mc_skills": {"method": "GET", "path": "/skills"},
                 "toolsets": {"method": "GET", "path": "/v1/toolsets"},
                 "sessions": {"method": "GET", "path": "/api/sessions"},
                 "session_create": {"method": "POST", "path": "/api/sessions"},
@@ -1226,6 +1229,70 @@ class APIServerAdapter(BasePlatformAdapter):
         return web.json_response({
             "object": "list",
             "data": skills,
+        })
+
+    @staticmethod
+    def _normalize_mc_skill(skill: Dict[str, Any]) -> Dict[str, Any]:
+        """Return the Mission Control/OpenClaw-compatible skill shape."""
+        raw_readiness = str(
+            skill.get("readiness")
+            or skill.get("readiness_status")
+            or "ready"
+        )
+        if raw_readiness in {"available", "ready"}:
+            readiness = "ready"
+        elif raw_readiness in {"setup_needed", "missing-deps", "missing_deps"}:
+            readiness = "missing-deps"
+        else:
+            readiness = "degraded"
+
+        raw_tags = skill.get("tags") or []
+        if isinstance(raw_tags, str):
+            tags = [tag.strip() for tag in raw_tags.split(",") if tag.strip()]
+        elif isinstance(raw_tags, list):
+            tags = [str(tag).strip() for tag in raw_tags if str(tag).strip()]
+        else:
+            tags = []
+
+        path = str(skill.get("path") or skill.get("skill_dir") or "")
+        return {
+            "name": str(skill.get("name") or ""),
+            "description": str(skill.get("description") or ""),
+            "path": path,
+            "category": skill.get("category"),
+            "tags": tags,
+            "enabled": bool(skill.get("enabled", True)),
+            "readiness": readiness,
+        }
+
+    async def _handle_mc_skills(self, request: "web.Request") -> "web.Response":
+        """GET /skills — Mission Control/OpenClaw-compatible skills payload."""
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+
+        try:
+            from tools.skills_tool import _find_all_skills, _sort_skills
+            skills = [
+                self._normalize_mc_skill(skill)
+                for skill in _sort_skills(_find_all_skills(skip_disabled=False))
+            ]
+        except Exception:
+            logger.exception("GET /skills failed")
+            return web.json_response(
+                _openai_error("Failed to enumerate skills", err_type="server_error"),
+                status=500,
+            )
+
+        agent_name = str(
+            self.config.extra.get("agent")
+            or os.getenv("HERMES_AGENT_NAME")
+            or "barry"
+        )
+        return web.json_response({
+            "agent": agent_name,
+            "source": "hermes",
+            "skills": skills,
         })
 
     async def _handle_toolsets(self, request: "web.Request") -> "web.Response":
@@ -4166,6 +4233,7 @@ class APIServerAdapter(BasePlatformAdapter):
             self._app.router.add_get("/v1/models", self._handle_models)
             self._app.router.add_get("/v1/capabilities", self._handle_capabilities)
             self._app.router.add_get("/v1/skills", self._handle_skills)
+            self._app.router.add_get("/skills", self._handle_mc_skills)
             self._app.router.add_get("/v1/toolsets", self._handle_toolsets)
             # Session/client control surface (thin wrappers over SessionDB + _run_agent)
             self._app.router.add_get("/api/sessions", self._handle_list_sessions)

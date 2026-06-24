@@ -1535,6 +1535,75 @@ class HindsightMemoryProvider(MemoryProvider):
         if update_mode == "append":
             self._last_retained_turn_count = len(self._session_turns)
 
+    def on_memory_write(
+        self,
+        action: str,
+        target: str,
+        content: str,
+        metadata: Dict[str, Any] | None = None,
+    ) -> None:
+        """Explicitly mirror accepted/overflow built-in memory writes to Hindsight.
+
+        This is intentionally independent of ``auto_retain``. Conversation
+        auto-retain can stay disabled while curated built-in memory writes and
+        overflow-routed entries still land in long-term memory.
+        """
+        if action not in {"add", "replace"}:
+            return
+        content = (content or "").strip()
+        if not content:
+            return
+        if self._shutting_down.is_set():
+            logger.debug("on_memory_write: skipped (shutting down)")
+            return
+
+        metadata_in = dict(metadata or {})
+        mirror_reason = str(metadata_in.get("mirror_reason") or "accepted_write")
+        built_in_saved = bool(metadata_in.get("built_in_saved", True))
+        retain_metadata = self._build_metadata(message_count=1, turn_index=self._turn_index)
+        retain_metadata.update({
+            "source": metadata_in.get("source") or self._retain_source or "hermes-built-in-memory",
+            "action": action,
+            "target": target,
+            "mirror_reason": mirror_reason,
+            "built_in_saved": str(built_in_saved).lower(),
+            "mirrored_at": _utc_timestamp(),
+        })
+        for key in ("write_origin", "execution_context", "session_id", "parent_session_id", "platform", "tool_name", "task_id", "tool_call_id", "mirror_path"):
+            value = metadata_in.get(key)
+            if value:
+                retain_metadata[key] = str(value)
+
+        tags = ["builtin-memory", f"builtin-target:{target}"]
+        if mirror_reason == "memory_limit_exceeded":
+            tags.append("overflow-routed")
+        else:
+            tags.append("accepted-write")
+        if self._session_id:
+            tags.append(f"session:{self._session_id}")
+
+        context = f"built-in memory {action} {mirror_reason}"
+
+        def _do_retain() -> None:
+            retain_kwargs = self._build_retain_kwargs(
+                content,
+                context=context,
+                metadata=retain_metadata,
+                tags=tags,
+            )
+            logger.debug(
+                "Hindsight memory-write mirror: action=%s target=%s reason=%s content_len=%d",
+                action,
+                target,
+                mirror_reason,
+                len(content),
+            )
+            self._run_hindsight_operation(lambda client: client.aretain(**retain_kwargs))
+
+        self._ensure_writer()
+        self._register_atexit()
+        self._retain_queue.put(_do_retain)
+
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         if self._memory_mode == "context":
             return []

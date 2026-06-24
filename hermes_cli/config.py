@@ -2504,6 +2504,34 @@ DEFAULT_CONFIG = {
             # `hermes secrets bitwarden setup`.
             "server_url": "",
         },
+        "doppler": {
+            # Master switch.  When false, Doppler is never contacted —
+            # same as not having this section at all.
+            "enabled": False,
+            # Name of the env var that holds the Doppler service token.
+            # Checked first; when unset we fall back to ``token_file``.
+            "token_env": "DOPPLER_TOKEN",
+            # Path to a 0600 file holding the service token.  Keeps the
+            # one bootstrap secret out of ~/.hermes/.env AND out of the
+            # launchd plist (which regenerates from a template), so the
+            # setup survives `hermes setup` / plist regeneration.
+            "token_file": "",
+            # Doppler project + config (a.k.a. environment) to sync from.
+            "project": "",
+            "config": "",
+            # When True, Doppler values overwrite existing env vars.
+            # Default True for the same reason as Bitwarden: centralized
+            # rotation should take effect without also editing .env.
+            "override_existing": True,
+            # Seconds to cache fetched secrets in-process.  0 disables.
+            "cache_ttl_seconds": 300,
+            # Persist fetched secret VALUES to <hermes_home>/cache (0600)
+            # so back-to-back CLI/cron invocations skip the fetch.  OFF by
+            # default: it writes plaintext secrets to disk, which conflicts
+            # with a "no plaintext secret file" policy.  In-process caching
+            # (within the long-running gateway) applies regardless.
+            "disk_cache": False,
+        },
     },
 
     # Paste collapse thresholds (TUI + CLI).

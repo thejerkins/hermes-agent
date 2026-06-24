@@ -1768,18 +1768,29 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
                 old_text=next_args.get("old_text"),
                 store=agent._memory_store,
             )
-            # Bridge: notify external memory provider of built-in memory writes
+            # Bridge: notify external memory provider only for writes the
+            # built-in tool explicitly mirrored (accepted writes or
+            # overflow-routed entries). Rejected gate/security writes stay
+            # local to the tool result and are not retained.
             if agent._memory_manager and next_args.get("action") in {"add", "replace"}:
                 try:
-                    agent._memory_manager.on_memory_write(
-                        next_args.get("action", ""),
-                        target,
-                        next_args.get("content", ""),
-                        metadata=agent._build_memory_write_metadata(
+                    parsed_result = json.loads(result) if isinstance(result, str) else (result or {})
+                    if isinstance(parsed_result, dict) and parsed_result.get("mirrored"):
+                        metadata = agent._build_memory_write_metadata(
                             task_id=effective_task_id,
                             tool_call_id=tool_call_id,
-                        ),
-                    )
+                        )
+                        metadata.update({
+                            "mirror_reason": parsed_result.get("mirror_reason") or "accepted_write",
+                            "built_in_saved": parsed_result.get("built_in_saved", True),
+                            "mirror_path": parsed_result.get("mirror_path", ""),
+                        })
+                        agent._memory_manager.on_memory_write(
+                            next_args.get("action", ""),
+                            target,
+                            next_args.get("content", ""),
+                            metadata=metadata,
+                        )
                 except Exception:
                     pass
             return _finish_agent_tool(result, next_args)

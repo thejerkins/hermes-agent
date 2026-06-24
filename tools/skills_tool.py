@@ -609,7 +609,9 @@ def _find_all_skills(*, skip_disabled: bool = False) -> List[Dict[str, Any]]:
     seen_names: set = set()
 
     # Load disabled set once (not per-skill)
-    disabled = set() if skip_disabled else _get_disabled_skill_names()
+    configured_disabled = _get_disabled_skill_names()
+    disabled = set() if skip_disabled else configured_disabled
+    env_snapshot = load_env()
 
     # Scan local dir first, then external dirs (local takes precedence)
     dirs_to_scan = []
@@ -652,12 +654,45 @@ def _find_all_skills(*, skip_disabled: bool = False) -> List[Dict[str, Any]]:
                     description = description[:MAX_DESCRIPTION_LENGTH - 3] + "..."
 
                 category = _get_category_from_path(skill_md)
+                hermes_meta = {}
+                metadata = frontmatter.get("metadata")
+                if isinstance(metadata, dict):
+                    hermes_meta = metadata.get("hermes", {}) or {}
+                tags = _parse_tags(hermes_meta.get("tags") or frontmatter.get("tags", ""))
+                legacy_env_vars, _ = _collect_prerequisite_values(frontmatter)
+                required_env_vars = _get_required_environment_variables(
+                    frontmatter, legacy_env_vars
+                )
+                missing_required_env_vars = [
+                    e["name"]
+                    for e in required_env_vars
+                    if not e.get("optional")
+                    and not _is_env_var_persisted(e["name"], env_snapshot)
+                ]
+                required_cred_files_raw = frontmatter.get("required_credential_files", [])
+                if not isinstance(required_cred_files_raw, list):
+                    required_cred_files_raw = []
+                missing_cred_files = [
+                    str(path)
+                    for path in required_cred_files_raw
+                    if str(path).strip()
+                    and not Path(os.path.expanduser(str(path))).exists()
+                ]
+                readiness = (
+                    "missing-deps"
+                    if missing_required_env_vars or missing_cred_files
+                    else "ready"
+                )
 
                 seen_names.add(name)
                 skills.append({
                     "name": name,
                     "description": description,
+                    "path": str(skill_dir),
                     "category": category,
+                    "tags": tags,
+                    "enabled": name not in configured_disabled,
+                    "readiness": readiness,
                 })
 
             except (UnicodeDecodeError, PermissionError) as e:

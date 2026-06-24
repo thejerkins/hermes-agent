@@ -133,6 +133,12 @@ scripts/out/
 # committed to the repo root. See the hermes-release skill.
 RELEASE_v*.md
 
+# Local one-off backup artifacts from manual fleet patch/restart work. Keep the
+# real source patches committed, but never sweep backup snapshots or stray
+# launchd scratch files into a branch with `git add -A`.
+*.bak-*
+/launchd
+
 # Desktop demo-run scratch output (hermes writes demo/*.txt during recorded
 # walkthroughs). Throwaway artifacts, never part of the app.
 apps/desktop/demo/

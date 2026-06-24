@@ -26,6 +26,7 @@ Design:
 import json
 import logging
 import os
+import re
 import tempfile
 import time
 from contextlib import contextmanager
@@ -57,6 +58,7 @@ def get_memory_dir() -> Path:
     return get_hermes_home() / "memories"
 
 ENTRY_DELIMITER = "\n§\n"
+MEMORY_MIRROR_FILENAME = "MEMORY_MIRROR.md"
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +80,61 @@ from tools.threat_patterns import first_threat_message as _first_threat_message
 def _scan_memory_content(content: str) -> Optional[str]:
     """Scan memory content for injection/exfil patterns. Returns error string if blocked."""
     return _first_threat_message(content, scope="strict")
+
+
+BUILTIN_MEMORY_ENTRY_CHAR_LIMIT = 200
+
+_OPERATIONAL_MEMORY_PATTERNS = [
+    (
+        "task_or_pr_status",
+        re.compile(
+            r"\b(PR\s*#\d+|pull/\d+|j-\d+|MC activity\s*\d+|CI\s+(clears?|passed|failed)|"
+            r"git\s+(commit|push|merge)|commit\s+[0-9a-f]{7,40}|branch\s+[`'\w./-]+\s+(deleted|pushed|merged|closed))\b",
+            re.I,
+        ),
+    ),
+    (
+        "incident_or_debug_log",
+        re.compile(
+            r"\b(smoke test(?:ed)?|traceback|stack trace|last exit status|PID\s*\d+|"
+            r"fixed in|restored in|already restored|post-cleanup|fallback incident)\b",
+            re.I,
+        ),
+    ),
+]
+
+
+def _memory_routing_gate(content: str) -> Optional[Dict[str, Optional[str]]]:
+    """Enforce the built-in-memory routing gate before disk writes.
+
+    Built-in MEMORY.md / USER.md is the tiny always-injected bootloader, not
+    the archive. Accept only compact standing facts that can plausibly remain
+    useful for 30+ days. Reject the mechanical cases we can prove at runtime
+    (operational/task-log phrasing) and warn on long entries without blocking
+    durable memories that need more context.
+    """
+    warning = None
+    if len(content) > BUILTIN_MEMORY_ENTRY_CHAR_LIMIT:
+        warning = (
+            "Built-in memory gate soft warning: "
+            f"{len(content)} chars exceeds the ~{BUILTIN_MEMORY_ENTRY_CHAR_LIMIT}-char bootloader target. "
+            "Keep this only if the full entry is a durable hard rule/preference useful for 30+ days; "
+            "otherwise compress it or route details to Hindsight, Barry Memory RAG, a plan, or a skill."
+        )
+    hits = [name for name, pattern in _OPERATIONAL_MEMORY_PATTERNS if pattern.search(content)]
+    if hits:
+        return {
+            "error": (
+                "Built-in memory gate rejected this entry: it looks like operational/task-log "
+                f"state ({', '.join(hits)}). Built-in memory is only for hard rules or durable "
+                "preferences useful for 30+ days; use Hindsight/session_search/RAG/plans/skills "
+                "for task progress, PRs, incidents, commits, CI, or debug traces."
+            ),
+            "warning": warning,
+        }
+    if warning:
+        return {"error": None, "warning": warning}
+    return None
 
 
 def _drift_error(path: "Path", bak_path: str) -> Dict[str, Any]:
@@ -249,6 +306,57 @@ class MemoryStore:
             return mem_dir / "USER.md"
         return mem_dir / "MEMORY.md"
 
+    @property
+    def memory_dir(self) -> Path:
+        """Profile-scoped memory directory, exposed for tests and mirror routing."""
+        return get_memory_dir()
+
+    def _mirror_path(self) -> Path:
+        return self.memory_dir / MEMORY_MIRROR_FILENAME
+
+    def _append_memory_mirror(
+        self,
+        *,
+        action: str,
+        target: str,
+        content: str,
+        mirror_reason: str,
+        built_in_saved: bool,
+        usage: str = "",
+    ) -> str:
+        """Append an explicit built-in memory write mirror for archive/RAG ingest.
+
+        The primary MEMORY.md/USER.md files stay tiny bootloaders. This mirror is
+        a Markdown document under the allowlisted memories root, so Barry Memory
+        RAG can ingest accepted writes and overflow-routed writes without turning
+        on provider-level auto-retain.
+        """
+        path = self._mirror_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        safe_content = content.strip()
+        block = (
+            f"\n\n## Built-in memory mirror — {timestamp}\n\n"
+            f"- action: {action}\n"
+            f"- target: {target}\n"
+            f"- mirror_reason: {mirror_reason}\n"
+            f"- built_in_saved: {str(built_in_saved).lower()}\n"
+        )
+        if usage:
+            block += f"- usage: {usage}\n"
+        block += f"\n```text\n{safe_content}\n```\n"
+        if not path.exists():
+            path.write_text(
+                "# Built-in Memory Mirror\n\n"
+                "Accepted built-in memory writes and overflow-routed writes. "
+                "This file is outside the prompt-injected bootloader and is "
+                "intended for explicit long-term/RAG ingestion.\n",
+                encoding="utf-8",
+            )
+        with path.open("a", encoding="utf-8") as f:
+            f.write(block)
+        return str(path)
+
     def _reload_target(self, target: str) -> Optional[str]:
         """Re-read entries from disk into in-memory state.
 
@@ -304,6 +412,10 @@ class MemoryStore:
         scan_error = _scan_memory_content(content)
         if scan_error:
             return {"success": False, "error": scan_error}
+        gate_result = _memory_routing_gate(content)
+        gate_warning = gate_result.get("warning") if gate_result else None
+        if gate_result and gate_result.get("error"):
+            return {"success": False, "error": gate_result["error"]}
 
         with self._file_lock(self._path_for(target)):
             # Re-read from disk under lock to pick up writes from other sessions.
@@ -327,24 +439,45 @@ class MemoryStore:
 
             if new_total > limit:
                 current = self._char_count(target)
+                usage = f"{current:,}/{limit:,}"
+                mirror_path = self._append_memory_mirror(
+                    action="add",
+                    target=target,
+                    content=content,
+                    mirror_reason="memory_limit_exceeded",
+                    built_in_saved=False,
+                    usage=usage,
+                )
                 return {
-                    "success": False,
-                    "error": (
-                        f"Memory at {current:,}/{limit:,} chars. "
-                        f"Adding this entry ({len(content)} chars) would exceed the limit. "
-                        f"Consolidate now: use 'replace' to merge overlapping entries into "
-                        f"shorter ones or 'remove' stale or less important entries (see "
-                        f"current_entries below), then retry this add — all in this turn."
+                    "success": True,
+                    "message": (
+                        f"Entry did not fit built-in memory at {usage}; "
+                        "mirrored to long-term memory/RAG archive instead."
                     ),
+                    "target": target,
+                    "built_in_saved": False,
+                    "mirrored": True,
+                    "mirror_reason": "memory_limit_exceeded",
+                    "mirror_path": mirror_path,
                     "current_entries": entries,
-                    "usage": f"{current:,}/{limit:,}",
+                    "usage": usage,
                 }
 
             entries.append(content)
             self._set_entries(target, entries)
             self.save_to_disk(target)
+            mirror_path = self._append_memory_mirror(
+                action="add",
+                target=target,
+                content=content,
+                mirror_reason="accepted_write",
+                built_in_saved=True,
+                usage=f"{new_total:,}/{limit:,}",
+            )
 
-        return self._success_response(target, "Entry added.")
+        response = self._success_response(target, "Entry added.", warning=gate_warning)
+        response.update({"mirrored": True, "mirror_path": mirror_path, "mirror_reason": "accepted_write"})
+        return response
 
     def replace(self, target: str, old_text: str, new_content: str) -> Dict[str, Any]:
         """Find entry containing old_text substring, replace it with new_content."""
@@ -359,6 +492,10 @@ class MemoryStore:
         scan_error = _scan_memory_content(new_content)
         if scan_error:
             return {"success": False, "error": scan_error}
+        gate_result = _memory_routing_gate(new_content)
+        gate_warning = gate_result.get("warning") if gate_result else None
+        if gate_result and gate_result.get("error"):
+            return {"success": False, "error": gate_result["error"]}
 
         with self._file_lock(self._path_for(target)):
             bak = self._reload_target(target)
@@ -393,23 +530,45 @@ class MemoryStore:
 
             if new_total > limit:
                 current = self._char_count(target)
+                usage = f"{current:,}/{limit:,}"
+                mirror_path = self._append_memory_mirror(
+                    action="replace",
+                    target=target,
+                    content=new_content,
+                    mirror_reason="memory_limit_exceeded",
+                    built_in_saved=False,
+                    usage=usage,
+                )
                 return {
-                    "success": False,
-                    "error": (
-                        f"Replacement would put memory at {new_total:,}/{limit:,} chars. "
-                        f"Shorten the new content, or 'remove' other stale or less important "
-                        f"entries to make room (see current_entries below), then retry — all "
-                        f"in this turn."
+                    "success": True,
+                    "message": (
+                        f"Replacement did not fit built-in memory at {usage}; "
+                        "mirrored to long-term memory/RAG archive instead."
                     ),
+                    "target": target,
+                    "built_in_saved": False,
+                    "mirrored": True,
+                    "mirror_reason": "memory_limit_exceeded",
+                    "mirror_path": mirror_path,
                     "current_entries": entries,
-                    "usage": f"{current:,}/{limit:,}",
+                    "usage": usage,
                 }
 
             entries[idx] = new_content
             self._set_entries(target, entries)
             self.save_to_disk(target)
+            mirror_path = self._append_memory_mirror(
+                action="replace",
+                target=target,
+                content=new_content,
+                mirror_reason="accepted_write",
+                built_in_saved=True,
+                usage=f"{new_total:,}/{limit:,}",
+            )
 
-        return self._success_response(target, "Entry replaced.")
+        response = self._success_response(target, "Entry replaced.", warning=gate_warning)
+        response.update({"mirrored": True, "mirror_path": mirror_path, "mirror_reason": "accepted_write"})
+        return response
 
     def remove(self, target: str, old_text: str) -> Dict[str, Any]:
         """Remove the entry containing old_text substring."""
@@ -462,7 +621,7 @@ class MemoryStore:
 
     # -- Internal helpers --
 
-    def _success_response(self, target: str, message: str = None) -> Dict[str, Any]:
+    def _success_response(self, target: str, message: Optional[str] = None, warning: Optional[str] = None) -> Dict[str, Any]:
         entries = self._entries_for(target)
         current = self._char_count(target)
         limit = self._char_limit(target)
@@ -477,6 +636,8 @@ class MemoryStore:
         }
         if message:
             resp["message"] = message
+        if warning:
+            resp["warning"] = warning
         return resp
 
     def _render_block(self, target: str, entries: List[str]) -> str:
@@ -751,6 +912,11 @@ MEMORY_SCHEMA = {
         "- You identify a stable fact that will be useful again in future sessions\n\n"
         "PRIORITY: User preferences and corrections > environment facts > procedural knowledge. "
         "The most valuable memory prevents the user from having to repeat themselves.\n\n"
+        "BUILT-IN MEMORY GATE: aim for ~200 chars as a soft warning target; entries must be "
+        "useful for 30+ days and not operational logs. If a fact is long, keep it only when "
+        "the extra context is durable and useful; otherwise use Hindsight, session_search, "
+        "Barry Memory RAG, plans, or skills instead. The tool rejects operational/task-log "
+        "entries at runtime and warns on long entries.\n\n"
         "Do NOT save task progress, session outcomes, completed-work logs, or temporary TODO "
         "state to memory; use session_search to recall those from past transcripts.\n"
         "If you've discovered a new way to do something, solved a problem that could be "
