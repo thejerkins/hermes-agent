@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.hermes.kimi-coding-shim</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/doppler</string>
+    <string>run</string>
+    <string>--project</string><string>hermes</string>
+    <string>--config</string><string>dev_personal</string>
+    <string>--</string>
+    <string>/usr/bin/python3</string>
+    <string>/Users/jerkins/.hermes/kimi-coding-shim/kimi_coding_shim.py</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key>
+  <dict><key>SuccessfulExit</key><false/></dict>
+  <key>StandardOutPath</key>
+  <string>/Users/jerkins/.hermes/logs/kimi-coding-shim.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/jerkins/.hermes/logs/kimi-coding-shim.error.log</string>
+</dict>
+</plist>
