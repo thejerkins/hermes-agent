@@ -2180,6 +2180,46 @@ class TestProfileArg:
         assert "<string>Aqua</string>" in plist
         assert "<string>Background</string>" in plist
 
+
+    def test_launchd_plist_uses_bare_python_gateway_not_doppler_wrapper(self, tmp_path, monkeypatch):
+        """Mac Mini gateway loads Doppler in-process; plist must stay bare Python."""
+        home = tmp_path / ".hermes"
+        home.mkdir()
+        python_path = tmp_path / "venv" / "bin" / "python"
+        python_path.parent.mkdir(parents=True)
+        python_path.write_text("", encoding="utf-8")
+
+        monkeypatch.setattr(gateway_cli, "get_hermes_home", lambda: home)
+        monkeypatch.setattr(gateway_cli, "get_python_path", lambda: str(python_path))
+        monkeypatch.setattr(gateway_cli, "_detect_venv_dir", lambda: python_path.parent.parent)
+        monkeypatch.setattr(gateway_cli, "PROJECT_ROOT", tmp_path / "checkout")
+
+        plist = gateway_cli.generate_launchd_plist()
+
+        assert f"<string>{python_path}</string>" in plist
+        assert "<string>-m</string>" in plist
+        assert "<string>hermes_cli.main</string>" in plist
+        assert "<string>gateway</string>" in plist
+        assert "<string>run</string>" in plist
+        assert "<string>--replace</string>" in plist
+        assert "<string>/opt/homebrew/bin/doppler</string>" not in plist
+        assert "<string>doppler</string>" not in plist
+
+    def test_launchd_plist_path_includes_homebrew_for_in_process_doppler(self, tmp_path, monkeypatch):
+        """launchd's default PATH is tiny; include Homebrew so Doppler can be found."""
+        home = tmp_path / ".hermes"
+        home.mkdir()
+        monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        monkeypatch.setattr(gateway_cli, "get_hermes_home", lambda: home)
+        monkeypatch.setattr(gateway_cli, "_detect_venv_dir", lambda: None)
+        monkeypatch.setattr(gateway_cli, "PROJECT_ROOT", tmp_path / "checkout")
+
+        plist = gateway_cli.generate_launchd_plist()
+
+        assert "<key>PATH</key>" in plist
+        assert "/opt/homebrew/bin" in plist
+        assert "/usr/local/bin" in plist
+
     def test_launchd_plist_path_uses_real_user_home_not_profile_home(self, tmp_path, monkeypatch):
         profile_dir = tmp_path / ".hermes" / "profiles" / "orcha"
         profile_dir.mkdir(parents=True)
