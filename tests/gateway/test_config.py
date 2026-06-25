@@ -328,7 +328,7 @@ class TestLoadGatewayConfig:
 """,
             encoding="utf-8",
         )
-        for name in (
+        discord_env_names = (
             "DISCORD_ALLOWED_CHANNELS",
             "DISCORD_AUTO_THREAD",
             "DISCORD_THREAD_REQUIRE_MENTION",
@@ -336,27 +336,36 @@ class TestLoadGatewayConfig:
             "DISCORD_HISTORY_BACKFILL_LIMIT",
             "DISCORD_REACTIONS",
             "DISCORD_ALLOW_BOTS",
-        ):
-            monkeypatch.delenv(name, raising=False)
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        )
+        original_discord_env = {name: os.environ.get(name) for name in discord_env_names}
+        try:
+            for name in discord_env_names:
+                monkeypatch.delenv(name, raising=False)
+            monkeypatch.setenv("HERMES_HOME", str(hermes_home))
 
-        config = load_gateway_config()
-        extra = config.platforms[Platform.DISCORD].extra
+            config = load_gateway_config()
+            extra = config.platforms[Platform.DISCORD].extra
 
-        assert extra["allowed_channels"] == 1498369488884728079
-        assert extra["auto_thread"] is True
-        assert extra["thread_require_mention"] is False
-        assert extra["history_backfill"] is True
-        assert extra["history_backfill_limit"] == 50
-        assert extra["reactions"] is True
-        assert extra["allow_bots"] == "mentions"
-        assert os.environ["DISCORD_ALLOWED_CHANNELS"] == "1498369488884728079"
-        assert os.environ["DISCORD_AUTO_THREAD"] == "true"
-        assert os.environ["DISCORD_THREAD_REQUIRE_MENTION"] == "false"
-        assert os.environ["DISCORD_HISTORY_BACKFILL"] == "true"
-        assert os.environ["DISCORD_HISTORY_BACKFILL_LIMIT"] == "50"
-        assert os.environ["DISCORD_REACTIONS"] == "true"
-        assert os.environ["DISCORD_ALLOW_BOTS"] == "mentions"
+            assert extra["allowed_channels"] == 1498369488884728079
+            assert extra["auto_thread"] is True
+            assert extra["thread_require_mention"] is False
+            assert extra["history_backfill"] is True
+            assert extra["history_backfill_limit"] == 50
+            assert extra["reactions"] is True
+            assert extra["allow_bots"] == "mentions"
+            assert os.environ["DISCORD_ALLOWED_CHANNELS"] == "1498369488884728079"
+            assert os.environ["DISCORD_AUTO_THREAD"] == "true"
+            assert os.environ["DISCORD_THREAD_REQUIRE_MENTION"] == "false"
+            assert os.environ["DISCORD_HISTORY_BACKFILL"] == "true"
+            assert os.environ["DISCORD_HISTORY_BACKFILL_LIMIT"] == "50"
+            assert os.environ["DISCORD_REACTIONS"] == "true"
+            assert os.environ["DISCORD_ALLOW_BOTS"] == "mentions"
+        finally:
+            for name, value in original_discord_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
 
     def test_discord_env_vars_override_config_yaml_bridge(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / ".hermes"

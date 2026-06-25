@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -133,6 +134,7 @@ async def test_gateway_stop_interrupts_after_drain_timeout():
     assert runner._shutdown_event.is_set() is True
 
 
+@pytest.mark.skipif(sys.platform == "darwin", reason="user systemd restart shortcut is Linux/systemd-only")
 @pytest.mark.asyncio
 async def test_gateway_stop_systemd_service_restart_exits_cleanly(tmp_path, monkeypatch):
     monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
