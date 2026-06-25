@@ -1018,6 +1018,20 @@ def load_gateway_config() -> GatewayConfig:
                         bridged["channel_prompts"] = {str(k): v for k, v in channel_prompts.items()}
                     else:
                         bridged["channel_prompts"] = channel_prompts
+                if plat == Platform.DISCORD:
+                    for _discord_key in (
+                        "allowed_channels",
+                        "ignored_channels",
+                        "no_thread_channels",
+                        "auto_thread",
+                        "thread_require_mention",
+                        "history_backfill",
+                        "history_backfill_limit",
+                        "reactions",
+                        "allow_bots",
+                    ):
+                        if _discord_key in platform_cfg:
+                            bridged[_discord_key] = platform_cfg[_discord_key]
                 if "gateway_restart_notification" in platform_cfg:
                     bridged["gateway_restart_notification"] = platform_cfg["gateway_restart_notification"]
                 enabled_was_explicit = _cfg_toplevel and "enabled" in platform_cfg
@@ -1066,6 +1080,36 @@ def load_gateway_config() -> GatewayConfig:
                         continue
                     _, extra = _ensure_platform_extra_dict(platforms_data, entry.name)
                     extra.update(seeded)
+
+            # Discord settings → env vars (env vars take precedence).
+            # The Discord adapter still reads several legacy DISCORD_* vars at
+            # runtime, so top-level discord.* config must seed those vars before
+            # adapter construction.  Also mirrors the values into platform extra
+            # above so pluginized Discord keeps config.yaml as source-of-truth.
+            discord_cfg = yaml_cfg.get("discord", {})
+            if isinstance(discord_cfg, dict):
+                _discord_env_keys = {
+                    "allowed_channels": "DISCORD_ALLOWED_CHANNELS",
+                    "ignored_channels": "DISCORD_IGNORED_CHANNELS",
+                    "free_response_channels": "DISCORD_FREE_RESPONSE_CHANNELS",
+                    "no_thread_channels": "DISCORD_NO_THREAD_CHANNELS",
+                    "auto_thread": "DISCORD_AUTO_THREAD",
+                    "thread_require_mention": "DISCORD_THREAD_REQUIRE_MENTION",
+                    "history_backfill": "DISCORD_HISTORY_BACKFILL",
+                    "history_backfill_limit": "DISCORD_HISTORY_BACKFILL_LIMIT",
+                    "reactions": "DISCORD_REACTIONS",
+                    "allow_bots": "DISCORD_ALLOW_BOTS",
+                    "require_mention": "DISCORD_REQUIRE_MENTION",
+                }
+                for _cfg_key, _env_key in _discord_env_keys.items():
+                    _value = discord_cfg.get(_cfg_key)
+                    if _value is None or os.getenv(_env_key):
+                        continue
+                    if isinstance(_value, list):
+                        _value = ",".join(str(v) for v in _value)
+                    elif isinstance(_value, bool):
+                        _value = str(_value).lower()
+                    os.environ[_env_key] = str(_value)
 
             # Slack settings → env vars (env vars take precedence)
             slack_cfg = yaml_cfg.get("slack", {})

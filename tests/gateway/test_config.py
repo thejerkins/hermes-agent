@@ -311,6 +311,74 @@ class TestLoadGatewayConfig:
 
         assert config.quick_commands == {"limits": {"type": "exec", "command": "echo ok"}}
 
+
+    def test_bridges_discord_live_channel_thread_settings_from_config_yaml(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        config_path = hermes_home / "config.yaml"
+        config_path.write_text(
+            """discord:
+  allowed_channels: 1498369488884728079
+  auto_thread: true
+  thread_require_mention: false
+  history_backfill: true
+  history_backfill_limit: 50
+  reactions: true
+  allow_bots: mentions
+""",
+            encoding="utf-8",
+        )
+        for name in (
+            "DISCORD_ALLOWED_CHANNELS",
+            "DISCORD_AUTO_THREAD",
+            "DISCORD_THREAD_REQUIRE_MENTION",
+            "DISCORD_HISTORY_BACKFILL",
+            "DISCORD_HISTORY_BACKFILL_LIMIT",
+            "DISCORD_REACTIONS",
+            "DISCORD_ALLOW_BOTS",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+        config = load_gateway_config()
+        extra = config.platforms[Platform.DISCORD].extra
+
+        assert extra["allowed_channels"] == 1498369488884728079
+        assert extra["auto_thread"] is True
+        assert extra["thread_require_mention"] is False
+        assert extra["history_backfill"] is True
+        assert extra["history_backfill_limit"] == 50
+        assert extra["reactions"] is True
+        assert extra["allow_bots"] == "mentions"
+        assert os.environ["DISCORD_ALLOWED_CHANNELS"] == "1498369488884728079"
+        assert os.environ["DISCORD_AUTO_THREAD"] == "true"
+        assert os.environ["DISCORD_THREAD_REQUIRE_MENTION"] == "false"
+        assert os.environ["DISCORD_HISTORY_BACKFILL"] == "true"
+        assert os.environ["DISCORD_HISTORY_BACKFILL_LIMIT"] == "50"
+        assert os.environ["DISCORD_REACTIONS"] == "true"
+        assert os.environ["DISCORD_ALLOW_BOTS"] == "mentions"
+
+    def test_discord_env_vars_override_config_yaml_bridge(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        config_path = hermes_home / "config.yaml"
+        config_path.write_text(
+            """discord:
+  allowed_channels: 111
+  auto_thread: true
+""",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("DISCORD_ALLOWED_CHANNELS", "222")
+        monkeypatch.setenv("DISCORD_AUTO_THREAD", "false")
+
+        config = load_gateway_config()
+
+        assert config.platforms[Platform.DISCORD].extra["allowed_channels"] == 111
+        assert config.platforms[Platform.DISCORD].extra["auto_thread"] is True
+        assert os.environ["DISCORD_ALLOWED_CHANNELS"] == "222"
+        assert os.environ["DISCORD_AUTO_THREAD"] == "false"
     def test_relay_platform_enabled_from_env_url(self, tmp_path, monkeypatch):
         """GATEWAY_RELAY_URL must enable Platform.RELAY in config.platforms so
         start_gateway()'s connect loop actually dials the connector. Registering
