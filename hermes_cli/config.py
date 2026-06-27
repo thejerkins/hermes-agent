@@ -2723,6 +2723,30 @@ DEFAULT_CONFIG = {
             # `hermes secrets bitwarden setup`.
             "server_url": "",
         },
+        "doppler": {
+            # Master switch. When false, Doppler is never contacted — same
+            # as not having this section at all.
+            "enabled": False,
+            # Env var containing the Doppler service token. Prefer token_file
+            # on launchd-managed machines so the plist stays secret-free.
+            "token_env": "DOPPLER_TOKEN",
+            # Optional path to a file containing the Doppler token. This keeps
+            # the one bootstrap secret outside config.yaml and LaunchAgents.
+            "token_file": "",
+            # Doppler project/config to sync, e.g. project="hermes",
+            # config="dev_personal".
+            "project": "",
+            "config": "",
+            # When True, Doppler values overwrite existing env vars. Default
+            # True because centralized rotation should beat stale shell/.env.
+            "override_existing": True,
+            # Seconds to cache fetched secrets in-process. 0 disables.
+            "cache_ttl_seconds": 300,
+            # Disk cache is off by default because it writes fetched secret
+            # values to the Hermes profile. Enable only for deliberate offline
+            # startup tradeoffs.
+            "disk_cache": False,
+        },
     },
 
     # Paste collapse thresholds (TUI + CLI).

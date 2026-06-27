@@ -3353,9 +3353,21 @@ def generate_launchd_plist() -> str:
         resolved_node_dir = str(Path(resolved_node).resolve().parent)
         if resolved_node_dir not in priority_dirs:
             priority_dirs.append(resolved_node_dir)
+    common_bin_paths = [
+        "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
+        "/usr/local/bin",
+        "/usr/local/sbin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+    ]
     sane_path = ":".join(
         dict.fromkeys(
-            priority_dirs + [p for p in os.environ.get("PATH", "").split(":") if p]
+            priority_dirs
+            + [p for p in os.environ.get("PATH", "").split(":") if p]
+            + common_bin_paths
         )
     )
 

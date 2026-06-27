@@ -32,6 +32,7 @@ incident.
 """
 
 import ast
+import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -226,6 +227,26 @@ def _ensure_discord_mock() -> None:
 # Run at collection time — before any test file's module-level imports.
 _ensure_telegram_mock()
 _ensure_discord_mock()
+
+
+@pytest.fixture(autouse=True)
+def _restore_gateway_platform_env():
+    """Keep gateway platform env bridges from leaking across tests.
+
+    Gateway config loading intentionally mirrors config.yaml into legacy
+    platform env vars for runtime adapters. Unit tests exercise that startup
+    bridge in-process, so they must restore those globals before the next test
+    observes channel/auth/thread gates.
+    """
+    prefixes = ("DISCORD_", "TELEGRAM_")
+    before = {k: v for k, v in os.environ.items() if k.startswith(prefixes)}
+    for key in list(before):
+        os.environ.pop(key, None)
+    yield
+    for key in [k for k in os.environ if k.startswith(prefixes)]:
+        if key not in before:
+            os.environ.pop(key, None)
+    os.environ.update(before)
 
 
 # ---------------------------------------------------------------------------

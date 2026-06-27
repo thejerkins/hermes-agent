@@ -10,6 +10,7 @@ No LLM, no real platform connections.
 """
 
 import asyncio
+import os
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -116,6 +117,21 @@ def _ensure_slack_mock():
 _ensure_telegram_mock()
 _ensure_discord_mock()
 _ensure_slack_mock()
+
+
+@pytest.fixture(autouse=True)
+def _restore_e2e_platform_env():
+    """Keep platform env gates from leaking into cross-platform e2e tests."""
+    prefixes = ("DISCORD_", "TELEGRAM_")
+    before = {k: v for k, v in os.environ.items() if k.startswith(prefixes)}
+    for key in list(before):
+        os.environ.pop(key, None)
+    yield
+    for key in [k for k in os.environ if k.startswith(prefixes)]:
+        if key not in before:
+            os.environ.pop(key, None)
+    os.environ.update(before)
+
 
 import discord  # noqa: E402 — mocked above
 from gateway.platforms.telegram import TelegramAdapter  # noqa: E402

@@ -114,14 +114,16 @@ class TestRepliedToMediaDispatch:
         """A text reply to an image-bearing Discord message should give the agent that image."""
         cached_path = "/tmp/replied-discord-image.png"
 
-        async def fake_cache_image_from_url(url, *, ext=".jpg"):
-            assert url == "https://cdn.discordapp.com/attachments/image.png"
-            assert ext == ".png"
+        cache_calls = []
+
+        async def fake_cache_discord_image(att, ext):
+            cache_calls.append((att.url, ext))
             return cached_path
 
         monkeypatch.setattr(
-            "plugins.platforms.discord.adapter.cache_image_from_url",
-            fake_cache_image_from_url,
+            discord_adapter,
+            "_cache_discord_image",
+            fake_cache_discord_image,
         )
         discord_adapter.handle_message = AsyncMock()
 
@@ -151,5 +153,6 @@ class TestRepliedToMediaDispatch:
         event = await_args.args[0]
         assert event.reply_to_message_id == "12345"
         assert event.media_urls == [cached_path]
+        assert cache_calls == [("https://cdn.discordapp.com/attachments/image.png", ".png")]
         assert event.media_types == ["image/png"]
         assert event.message_type.value == "photo"

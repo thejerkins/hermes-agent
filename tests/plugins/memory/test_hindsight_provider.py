@@ -1819,3 +1819,58 @@ def test_save_config_sets_owner_only_permissions(tmp_path):
     assert config_file.exists()
     mode = stat.S_IMODE(config_file.stat().st_mode)
     assert mode == 0o600, f"Expected 0o600 (owner-only), got {oct(mode)}"
+
+
+def test_on_memory_write_mirrors_builtin_write_metadata(tmp_path, monkeypatch):
+    provider = _provider_for_mode(tmp_path, monkeypatch, "cloud")
+    captured = {}
+
+    def fake_build_retain_kwargs(content, **kwargs):
+        captured["content"] = content
+        captured.update(kwargs)
+        return {
+            "bank_id": provider._bank_id,
+            "content": content,
+            **kwargs,
+        }
+
+    monkeypatch.setattr(provider, "_build_retain_kwargs", fake_build_retain_kwargs)
+    monkeypatch.setattr(provider, "_run_hindsight_operation", lambda operation: None)
+
+    provider.on_memory_write(
+        "add",
+        "memory",
+        "User prefers concise operational summaries.",
+        metadata={
+            "mirror_reason": "memory_limit_exceeded",
+            "built_in_saved": False,
+            "mirror_path": "/tmp/MEMORY_MIRROR.md",
+            "task_id": "task-1",
+        },
+    )
+    provider._retain_queue.join()
+
+    assert captured["content"] == "User prefers concise operational summaries."
+    assert captured["context"] == "built-in memory add memory_limit_exceeded"
+    assert "overflow-routed" in captured["tags"]
+    assert "builtin-memory" in captured["tags"]
+    assert captured["metadata"]["source"] == "hermes-built-in-memory"
+    assert captured["metadata"]["action"] == "add"
+    assert captured["metadata"]["target"] == "memory"
+    assert captured["metadata"]["built_in_saved"] == "false"
+    assert captured["metadata"]["mirror_path"] == "/tmp/MEMORY_MIRROR.md"
+    assert captured["metadata"]["task_id"] == "task-1"
+    provider.shutdown()
+
+
+def test_embedded_service_exception_500_is_retriable(tmp_path, monkeypatch):
+    provider = HindsightMemoryProvider()
+    provider._mode = "local_embedded"
+
+    class ServiceException(Exception):
+        status = 500
+
+    assert provider._is_retriable_embedded_connection_error(ServiceException("Internal Server Error")) is True
+
+    provider._mode = "cloud"
+    assert provider._is_retriable_embedded_connection_error(ServiceException("Internal Server Error")) is False
