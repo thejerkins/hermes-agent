@@ -412,6 +412,7 @@ class TestRequireServiceInstalled:
         gateway_cli._require_service_installed("start")
 
 
+@pytest.mark.skipif(sys.platform == "darwin", reason="systemd unit generation tests target Linux/WSL; macOS gateway uses launchd")
 class TestGeneratedSystemdUnits:
     def _expected_timeout_stop_sec(self) -> str:
         timeout = int(max(60, DEFAULT_GATEWAY_RESTART_DRAIN_TIMEOUT) + 30)
