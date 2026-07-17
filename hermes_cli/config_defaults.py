@@ -3292,6 +3292,18 @@ DEFAULT_CONFIG = {
             # `hermes secrets bitwarden setup`.
             "server_url": "",
         },
+        "doppler": {
+            # Keep the bootstrap token outside config.yaml and launchd. The
+            # configured source resolves the remaining runtime credentials.
+            "enabled": False,
+            "token_env": "DOPPLER_TOKEN",
+            "token_file": "",
+            "project": "",
+            "config": "",
+            "override_existing": True,
+            "cache_ttl_seconds": 300,
+            "disk_cache": False,
+        },
         "onepassword": {
             # Master switch.  When false, the op CLI is never invoked —
             # same as not having this section at all.
